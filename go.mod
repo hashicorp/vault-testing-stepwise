@@ -19,7 +19,7 @@ require (
 	github.com/Microsoft/go-winio v0.5.2 // indirect
 	github.com/cenkalti/backoff/v3 v3.0.0 // indirect
 	github.com/containerd/containerd v1.6.26 // indirect
-	github.com/docker/distribution v2.7.1+incompatible // indirect
+	github.com/docker/distribution v2.8.2+incompatible // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/fatih/color v1.7.0 // indirect
 	github.com/frankban/quicktest v1.13.0 // indirect
