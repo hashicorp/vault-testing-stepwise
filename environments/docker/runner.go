@@ -10,6 +10,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/strslice"
 	docker "github.com/docker/docker/client"
@@ -59,7 +60,7 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 	// Docker library, or if not found pull the matching image from docker hub. If
 	// not found on docker hub, returns an error. The response must be read in
 	// order for the local image.
-	resp, err := d.dockerAPI.ImageCreate(ctx, d.ContainerConfig.Image, types.ImageCreateOptions{})
+	resp, err := d.dockerAPI.ImageCreate(ctx, d.ContainerConfig.Image, image.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,7 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 	hostConfig.CapAdd = strslice.StrSlice{"IPC_LOCK"}
 	cfg.Hostname = d.ContainerName
 	fullName := d.ContainerName
-	container, err := d.dockerAPI.ContainerCreate(ctx, &cfg, hostConfig, networkingConfig, nil, fullName)
+	newContainer, err := d.dockerAPI.ContainerCreate(ctx, &cfg, hostConfig, networkingConfig, nil, fullName)
 	if err != nil {
 		return nil, fmt.Errorf("container create failed: %v", err)
 	}
@@ -97,18 +98,18 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 			return nil, fmt.Errorf("error preparing copy from %q -> %q: %v", from, to, err)
 		}
 		defer content.Close()
-		err = d.dockerAPI.CopyToContainer(ctx, container.ID, dstDir, content, types.CopyToContainerOptions{})
+		err = d.dockerAPI.CopyToContainer(ctx, newContainer.ID, dstDir, content, types.CopyToContainerOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("error copying from %q -> %q: %v", from, to, err)
 		}
 	}
 
-	err = d.dockerAPI.ContainerStart(ctx, container.ID, types.ContainerStartOptions{})
+	err = d.dockerAPI.ContainerStart(ctx, newContainer.ID, container.StartOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("container start failed: %v", err)
 	}
 
-	inspect, err := d.dockerAPI.ContainerInspect(ctx, container.ID)
+	inspect, err := d.dockerAPI.ContainerInspect(ctx, newContainer.ID)
 	if err != nil {
 		return nil, err
 	}
