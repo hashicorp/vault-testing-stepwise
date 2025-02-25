@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/go-uuid v1.0.2
 	github.com/hashicorp/vault/api v1.14.0
 	github.com/hashicorp/vault/sdk v0.8.1
-	golang.org/x/net v0.29.0
+	golang.org/x/net v0.33.0
 )
 
 require (
