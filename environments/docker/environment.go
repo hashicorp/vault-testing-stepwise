@@ -856,7 +856,8 @@ func (dc *DockerCluster) Setup() error {
 	case api.PluginTypeDatabase:
 	case api.PluginTypeSecrets:
 		err = client.Sys().Mount(dc.MountPath(), &api.MountInput{
-			Type: registryName,
+			Type:   registryName,
+			Config: dc.MountOptions.MountConfigInput,
 		})
 	default:
 		return fmt.Errorf("unknown plugin type: %s", dc.MountOptions.PluginType.String())

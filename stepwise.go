@@ -96,6 +96,7 @@ type MountOptions struct {
 	//
 	PluginName string
 
+	// MountConfigInput represents the configuration input for mounting the plugin.
 	MountConfigInput api.MountConfigInput
 }
 
