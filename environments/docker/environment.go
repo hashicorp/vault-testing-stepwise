@@ -850,7 +850,8 @@ func (dc *DockerCluster) Setup() error {
 		// auth mounts via the /sys endpoint, we need to remove that prefix
 		authPath := strings.TrimPrefix(dc.MountPath(), "auth/")
 		err = client.Sys().EnableAuthWithOptions(authPath, &api.EnableAuthOptions{
-			Type: registryName,
+			Type:   registryName,
+			Config: dc.MountOptions.MountConfigInput,
 		})
 	case api.PluginTypeDatabase:
 	case api.PluginTypeSecrets:

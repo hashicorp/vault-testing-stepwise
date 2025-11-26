@@ -95,6 +95,8 @@ type MountOptions struct {
 	// - path_generate.go
 	//
 	PluginName string
+
+	MountConfigInput api.MountConfigInput
 }
 
 // Step represents a single step of a test Case
