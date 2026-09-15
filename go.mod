@@ -13,7 +13,7 @@ require (
 	github.com/moby/go-archive v0.3.0
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
-	golang.org/x/net v0.29.0
+	golang.org/x/net v0.38.0
 )
 
 require (
