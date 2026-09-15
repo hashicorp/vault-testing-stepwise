@@ -57,16 +57,11 @@ func (d *Runner) Start(ctx context.Context) (*container.InspectResponse, error) 
 		}
 	}
 
-	// Best-effort pull. ImagePull here will use a matching image from the local
-	// Docker library, or if not found pull the matching image from docker hub. If
-	// not found on docker hub, returns an error. The response must be drained in
-	// order for the local image to be used.
-	pullResp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, client.ImagePullOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if err := pullResp.Wait(ctx); err != nil {
-		return nil, err
+	// Best-effort pull. If the image already exists locally this is a no-op.
+	// Pull errors are intentionally ignored so that a locally cached image is
+	// used when the registry is unreachable or the image is not found there.
+	if pullResp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, client.ImagePullOptions{}); err == nil {
+		_ = pullResp.Wait(ctx)
 	}
 
 	cfg := *d.ContainerConfig

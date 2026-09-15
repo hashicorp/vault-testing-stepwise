@@ -611,11 +611,14 @@ func (n *dockerClusterNode) start(cli *client.Client, caDir, netName string, net
 		return err
 	}
 
-	if netSettings, ok := n.container.NetworkSettings.Networks[netName]; ok {
-		n.Address = &net.TCPAddr{
-			IP:   net.ParseIP(netSettings.IPAddress.String()),
-			Port: 8200,
-		}
+	netSettings, ok := n.container.NetworkSettings.Networks[netName]
+	if !ok {
+		n.Cleanup()
+		return fmt.Errorf("container not attached to network %q", netName)
+	}
+	n.Address = &net.TCPAddr{
+		IP:   net.ParseIP(netSettings.IPAddress.String()),
+		Port: 8200,
 	}
 	port8200 := network.MustParsePort("8200/tcp")
 	ports := n.container.NetworkSettings.Ports[port8200]
