@@ -6,20 +6,17 @@ package docker
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"net/netip"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/strslice"
-	docker "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
+	"github.com/moby/go-archive"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // Runner manages the lifecycle of the Docker container
 type Runner struct {
-	dockerAPI       *docker.Client
+	dockerAPI       *client.Client
 	ContainerConfig *container.Config
 	ContainerName   string
 	NetName         string
@@ -31,7 +28,7 @@ type Runner struct {
 // pulling the specified Vault image, creating the container, and copies the
 // plugin binary into the container file system before starting the container
 // itself.
-func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
+func (d *Runner) Start(ctx context.Context) (*container.InspectResponse, error) {
 	hostConfig := &container.HostConfig{
 		PublishAllPorts: true,
 		AutoRemove:      true,
@@ -47,8 +44,12 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 			Aliases: []string{d.ContainerName},
 		}
 		if len(d.IP) != 0 {
+			addr, err := netip.ParseAddr(d.IP)
+			if err != nil {
+				return nil, fmt.Errorf("invalid IP address %q: %v", d.IP, err)
+			}
 			es.IPAMConfig = &network.EndpointIPAMConfig{
-				IPv4Address: d.IP,
+				IPv4Address: addr,
 			}
 		}
 		networkingConfig.EndpointsConfig = map[string]*network.EndpointSettings{
@@ -56,23 +57,22 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 		}
 	}
 
-	// Best-effort pull. ImageCreate here will use a matching image from the local
-	// Docker library, or if not found pull the matching image from docker hub. If
-	// not found on docker hub, returns an error. The response must be read in
-	// order for the local image.
-	resp, err := d.dockerAPI.ImageCreate(ctx, d.ContainerConfig.Image, image.CreateOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if resp != nil {
-		_, _ = ioutil.ReadAll(resp)
+	// Best-effort pull. If the image already exists locally this is a no-op.
+	// Pull errors are intentionally ignored so that a locally cached image is
+	// used when the registry is unreachable or the image is not found there.
+	if pullResp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, client.ImagePullOptions{}); err == nil {
+		_ = pullResp.Wait(ctx)
 	}
 
 	cfg := *d.ContainerConfig
-	hostConfig.CapAdd = strslice.StrSlice{"IPC_LOCK"}
+	hostConfig.CapAdd = []string{"IPC_LOCK"}
 	cfg.Hostname = d.ContainerName
-	fullName := d.ContainerName
-	newContainer, err := d.dockerAPI.ContainerCreate(ctx, &cfg, hostConfig, networkingConfig, nil, fullName)
+	newContainer, err := d.dockerAPI.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:             d.ContainerName,
+		Config:           &cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("container create failed: %v", err)
 	}
@@ -98,20 +98,23 @@ func (d *Runner) Start(ctx context.Context) (*types.ContainerJSON, error) {
 			return nil, fmt.Errorf("error preparing copy from %q -> %q: %v", from, to, err)
 		}
 		defer content.Close()
-		err = d.dockerAPI.CopyToContainer(ctx, newContainer.ID, dstDir, content, container.CopyToContainerOptions{})
+		_, err = d.dockerAPI.CopyToContainer(ctx, newContainer.ID, client.CopyToContainerOptions{
+			DestinationPath: dstDir,
+			Content:         content,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error copying from %q -> %q: %v", from, to, err)
 		}
 	}
 
-	err = d.dockerAPI.ContainerStart(ctx, newContainer.ID, container.StartOptions{})
+	_, err = d.dockerAPI.ContainerStart(ctx, newContainer.ID, client.ContainerStartOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("container start failed: %v", err)
 	}
 
-	inspect, err := d.dockerAPI.ContainerInspect(ctx, newContainer.ID)
+	inspectResult, err := d.dockerAPI.ContainerInspect(ctx, newContainer.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	return &inspect, nil
+	return &inspectResult.Container, nil
 }

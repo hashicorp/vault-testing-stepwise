@@ -16,7 +16,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	mathrand "math/rand"
 	"net"
@@ -28,22 +27,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	docker "github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/hashicorp/go-multierror"
 	uuid "github.com/hashicorp/go-uuid"
 	stepwise "github.com/hashicorp/vault-testing-stepwise"
 	"github.com/hashicorp/vault/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"golang.org/x/net/http2"
 )
 
 var _ stepwise.Environment = (*DockerCluster)(nil)
-
-const dockerVersion = "1.40"
 
 // DockerCluster is used to managing the lifecycle of the test Vault cluster
 type DockerCluster struct {
@@ -94,11 +89,11 @@ func (dc *DockerCluster) Teardown() error {
 
 	// clean up networks
 	if dc.networkID != "" {
-		cli, err := docker.NewClientWithOpts(docker.FromEnv, docker.WithVersion(dockerVersion))
+		cli, err := client.NewClientWithOpts(client.FromEnv)
 		if err != nil {
 			return multierror.Append(result, err)
 		}
-		if err := cli.NetworkRemove(context.Background(), dc.networkID); err != nil {
+		if _, err := cli.NetworkRemove(context.Background(), dc.networkID, client.NetworkRemoveOptions{}); err != nil {
 			return multierror.Append(result, err)
 		}
 	}
@@ -351,7 +346,7 @@ func (dc *DockerCluster) setupCA(opts *DockerClusterOptions) error {
 	dc.CACertPEM = pem.EncodeToMemory(CACertPEMBlock)
 
 	dc.CACertPEMFile = filepath.Join(dc.tmpDir, "ca", "ca.pem")
-	err = ioutil.WriteFile(dc.CACertPEMFile, dc.CACertPEM, 0o755)
+	err = os.WriteFile(dc.CACertPEMFile, dc.CACertPEM, 0o755)
 	if err != nil {
 		return err
 	}
@@ -417,13 +412,13 @@ func (n *dockerClusterNode) setupCert() error {
 	})
 
 	n.ServerCertPEMFile = filepath.Join(n.WorkDir, "cert.pem")
-	err = ioutil.WriteFile(n.ServerCertPEMFile, n.ServerCertPEM, 0o755)
+	err = os.WriteFile(n.ServerCertPEMFile, n.ServerCertPEM, 0o755)
 	if err != nil {
 		return err
 	}
 
 	n.ServerKeyPEMFile = filepath.Join(n.WorkDir, "key.pem")
-	err = ioutil.WriteFile(n.ServerKeyPEMFile, n.ServerKeyPEM, 0o755)
+	err = os.WriteFile(n.ServerKeyPEMFile, n.ServerKeyPEM, 0o755)
 	if err != nil {
 		return err
 	}
@@ -489,8 +484,8 @@ type dockerClusterNode struct {
 	TLSConfig         *tls.Config
 	WorkDir           string
 	Cluster           *DockerCluster
-	container         *types.ContainerJSON
-	dockerAPI         *docker.Client
+	container         *container.InspectResponse
+	dockerAPI         *client.Client
 }
 
 // NewAPIClient creates and configures a Vault API client to communicate with
@@ -498,7 +493,7 @@ type dockerClusterNode struct {
 func (n *dockerClusterNode) NewAPIClient() (*api.Client, error) {
 	transport := cleanhttp.DefaultPooledTransport()
 	transport.TLSClientConfig = n.TLSConfig.Clone()
-	if err := http2.ConfigureTransport(transport); err != nil {
+	if err := http2.ConfigureTransport(transport); err != nil { //nolint:staticcheck
 		return nil, err
 	}
 	client := &http.Client{
@@ -527,10 +522,11 @@ func (n *dockerClusterNode) NewAPIClient() (*api.Client, error) {
 func (n *dockerClusterNode) Cleanup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return n.dockerAPI.ContainerKill(ctx, n.container.ID, "KILL")
+	_, err := n.dockerAPI.ContainerKill(ctx, n.container.ID, client.ContainerKillOptions{Signal: "KILL"})
+	return err
 }
 
-func (n *dockerClusterNode) start(cli *docker.Client, caDir, netName string, netCIDR *dockerClusterNode, pluginBinPath string) error {
+func (n *dockerClusterNode) start(cli *client.Client, caDir, netName string, netCIDR *dockerClusterNode, pluginBinPath string) error {
 	n.dockerAPI = cli
 
 	err := n.setupCert()
@@ -575,7 +571,7 @@ func (n *dockerClusterNode) start(cli *docker.Client, caDir, netName string, net
 		return err
 	}
 
-	err = ioutil.WriteFile(filepath.Join(n.WorkDir, "local.json"), cfgJSON, 0o644)
+	err = os.WriteFile(filepath.Join(n.WorkDir, "local.json"), cfgJSON, 0o644)
 	if err != nil {
 		return err
 	}
@@ -599,8 +595,11 @@ func (n *dockerClusterNode) start(cli *docker.Client, caDir, netName string, net
 				"VAULT_API_ADDR=https://127.0.0.1:8200",
 				fmt.Sprintf("VAULT_REDIRECT_ADDR=https://%s:8200", n.Name()),
 			},
-			Labels:       nil,
-			ExposedPorts: nat.PortSet{"8200/tcp": {}, "8201/tcp": {}},
+			Labels: nil,
+			ExposedPorts: network.PortSet{
+				network.MustParsePort("8200/tcp"): {},
+				network.MustParsePort("8201/tcp"): {},
+			},
 		},
 		ContainerName: n.Name(),
 		NetName:       netName,
@@ -612,11 +611,17 @@ func (n *dockerClusterNode) start(cli *docker.Client, caDir, netName string, net
 		return err
 	}
 
+	netSettings, ok := n.container.NetworkSettings.Networks[netName]
+	if !ok {
+		n.Cleanup()
+		return fmt.Errorf("container not attached to network %q", netName)
+	}
 	n.Address = &net.TCPAddr{
-		IP:   net.ParseIP(n.container.NetworkSettings.IPAddress),
+		IP:   net.ParseIP(netSettings.IPAddress.String()),
 		Port: 8200,
 	}
-	ports := n.container.NetworkSettings.NetworkSettingsBase.Ports[nat.Port("8200/tcp")]
+	port8200 := network.MustParsePort("8200/tcp")
+	ports := n.container.NetworkSettings.Ports[port8200]
 	if len(ports) == 0 {
 		n.Cleanup()
 		return fmt.Errorf("could not find port binding for 8200/tcp")
@@ -700,7 +705,7 @@ func (cluster *DockerCluster) setupDockerCluster(opts *DockerClusterOptions) err
 		}
 		cluster.tmpDir = opts.tmpDir
 	} else {
-		tempDir, err := ioutil.TempDir("", "vault-test-cluster-")
+		tempDir, err := os.MkdirTemp("", "vault-test-cluster-")
 		if err != nil {
 			return err
 		}
@@ -740,7 +745,7 @@ func (cluster *DockerCluster) setupDockerCluster(opts *DockerClusterOptions) err
 		return err
 	}
 
-	cli, err := docker.NewClientWithOpts(docker.FromEnv, docker.WithVersion(dockerVersion))
+	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return err
 	}
@@ -779,7 +784,7 @@ func (cluster *DockerCluster) setupDockerCluster(opts *DockerClusterOptions) err
 
 // Docker networking functions
 // setupNetwork establishes networking for the Docker container
-func setupNetwork(cli *docker.Client, netName string) (string, error) {
+func setupNetwork(cli *client.Client, netName string) (string, error) {
 	id, err := createNetwork(cli, netName)
 	if err != nil {
 		return "", fmt.Errorf("couldn't create network %s: %w", netName, err)
@@ -787,8 +792,8 @@ func setupNetwork(cli *docker.Client, netName string) (string, error) {
 	return id, nil
 }
 
-func createNetwork(cli *docker.Client, netName string) (string, error) {
-	resp, err := cli.NetworkCreate(context.Background(), netName, network.CreateOptions{
+func createNetwork(cli *client.Client, netName string) (string, error) {
+	resp, err := cli.NetworkCreate(context.Background(), netName, client.NetworkCreateOptions{
 		Driver:  "bridge",
 		Options: map[string]string{},
 		IPAM: &network.IPAM{
@@ -815,7 +820,7 @@ func (dc *DockerCluster) Setup() error {
 	}
 
 	// tmpDir gets cleaned up when the cluster is cleaned up
-	tmpDir, err := ioutil.TempDir("", "bin")
+	tmpDir, err := os.MkdirTemp("", "bin")
 	if err != nil {
 		return err
 	}
