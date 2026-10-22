@@ -101,6 +101,7 @@ func (d *Runner) Start(ctx context.Context) (*container.InspectResponse, error) 
 		_, err = d.dockerAPI.CopyToContainer(ctx, newContainer.ID, client.CopyToContainerOptions{
 			DestinationPath: dstDir,
 			Content:         content,
+			CopyUIDGID:      true,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("error copying from %q -> %q: %v", from, to, err)
