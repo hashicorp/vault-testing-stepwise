@@ -96,6 +96,11 @@ type MountOptions struct {
 	//
 	PluginName string
 
+	// VaultImage is the Docker image used by the Docker environment. Set it to a
+	// tagged image (for example, "hashicorp/vault:1.20.0") to pin the Vault
+	// version. If empty, the environment uses "hashicorp/vault:latest".
+	VaultImage string
+
 	// MountConfigInput represents the configuration input for mounting the plugin.
 	MountConfigInput api.MountConfigInput
 }
