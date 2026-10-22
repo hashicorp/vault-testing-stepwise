@@ -585,10 +585,15 @@ func (n *dockerClusterNode) start(cli *client.Client, caDir, netName string, net
 		copyFromTo[pluginBinPath] = filepath.Join("/vault/config", base)
 	}
 
+	image := n.Cluster.MountOptions.VaultImage
+	if image == "" {
+		image = "hashicorp/vault:latest"
+	}
+
 	r := &Runner{
 		dockerAPI: cli,
 		ContainerConfig: &container.Config{
-			Image:      "hashicorp/vault:latest",
+			Image:      image,
 			Entrypoint: []string{"/bin/sh", "-c", "/usr/local/bin/docker-entrypoint.sh vault server -log-level=trace -dev-plugin-dir=./vault/config -config /vault/config/local.json"},
 			Env: []string{
 				"VAULT_CLUSTER_INTERFACE=eth0",
